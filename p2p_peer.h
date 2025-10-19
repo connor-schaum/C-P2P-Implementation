@@ -10,7 +10,6 @@
 // Peer structure
 typedef struct {
     char address[128];  // IP:PORT
-    char id[64];        // Peer ID
     time_t last_seen;   // Last time we heard from this peer
 } P2PPeer;
 
@@ -23,7 +22,13 @@ typedef struct {
 P2PPeerList* p2p_peer_list_create();
 
 // Add peer to list (with duplicate checking)
-int p2p_peer_list_add(P2PPeerList* list, const char* address, const char* peer_id);
+int p2p_peer_list_add(P2PPeerList* list, const char* address, const char* node_id);
+
+// Load peers from file into in-memory list
+int p2p_peer_list_load_from_file(P2PPeerList* list, const char* node_id);
+
+// Check if peer exists in file
+int p2p_peer_exists_in_file(const char* address, const char* node_id);
 
 // Remove peer from list
 int p2p_peer_list_remove(P2PPeerList* list, const char* address);

@@ -29,6 +29,9 @@ int p2p_network_start(P2PNetwork* network);
 // Send message to specific address
 int p2p_network_send(P2PNetwork* network, const char* address, const char* type, const char* data);
 
+// Send discovery message
+int p2p_network_send_discovery(P2PNetwork* network, const char* address, int ttl, const char* peer_list);
+
 // Broadcast message to all peers
 int p2p_network_broadcast(P2PNetwork* network, const char* type, const char* data);
 
