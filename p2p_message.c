@@ -1,7 +1,7 @@
 #include "p2p_message.h"
 
 // Create a new message
-P2PMessage* p2p_message_create(const char* type, const char* sender, const char* data, int ttl) {
+P2PMessage* p2p_message_create(const char* type, const char* sender, const char* data) {
     P2PMessage* msg = malloc(sizeof(P2PMessage));
     if (!msg) return NULL;
     
@@ -11,7 +11,6 @@ P2PMessage* p2p_message_create(const char* type, const char* sender, const char*
     msg->sender[63] = '\0';
     strncpy(msg->data, data, 255);
     msg->data[255] = '\0';
-    msg->ttl = ttl;
     
     return msg;
 }

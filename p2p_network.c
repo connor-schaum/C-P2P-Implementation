@@ -1,4 +1,5 @@
 #include "p2p_network.h"
+#include "p2p_utils.h"
 
 // Global network reference for callbacks
 static P2PNetwork* g_network = NULL;
@@ -46,18 +47,99 @@ void* p2p_server_thread(void* arg) {
         
         if (client_socket < 0) continue;
         
-        char* client_ip = inet_ntoa(client_addr.sin_addr);
-        
-        // Handle connection
-        P2PMessage msg;
-        if (read(client_socket, &msg, sizeof(P2PMessage)) == sizeof(P2PMessage)) {
-            // Add sender to peer list (bidirectional peer discovery)
-            char sender_address[128];
-            snprintf(sender_address, sizeof(sender_address), "%s:1249", client_ip); // Default port for now
-            p2p_peer_list_add(network->peer_list, sender_address, msg.sender);
+        // Handle connection - try discovery message first
+        DiscoveryMessage disc_msg;
+        if (read(client_socket, &disc_msg, sizeof(DiscoveryMessage)) == sizeof(DiscoveryMessage)) {
             
-            if (network->message_handler) {
-                network->message_handler(&msg);
+            // Add sender to peer list using the sender's address from the message
+            p2p_peer_list_add(network->peer_list, disc_msg.sender, network->node_id);
+            
+            // Handle discovery message
+            if (strcmp(disc_msg.type, "DISCOVERY") == 0 && disc_msg.ttl > 0) {
+                // Parse and add peers from the received peer list
+                char* peer_list_copy = strdup(disc_msg.peer_list);
+                char* token = strtok(peer_list_copy, ",");
+                while (token != NULL) {
+                    // Skip empty tokens and self
+                    if (strlen(token) > 0 && strcmp(token, network->node_id) != 0) {
+                        int added = p2p_peer_list_add(network->peer_list, token, network->node_id);
+                        // If peer was newly added, automatically connect to it
+                        if (added > 0) {
+                            printf("Auto-connecting to newly discovered peer: %s\n", token);
+                            p2p_network_connect(network, token);
+                        }
+                    }
+                    token = strtok(NULL, ",");
+                }
+                free(peer_list_copy);
+                
+                // Send back our peer list with decremented TTL
+                char our_peer_list[1024];
+                p2p_build_peer_list_string(network->peer_list, our_peer_list, sizeof(our_peer_list));
+                
+                DiscoveryMessage response;
+                strncpy(response.type, "DISCOVERY", 31);
+                response.type[31] = '\0';
+                strncpy(response.sender, network->node_id, 63);
+                response.sender[63] = '\0';
+                response.ttl = disc_msg.ttl - 1;
+                strncpy(response.peer_list, our_peer_list, 1023);
+                response.peer_list[1023] = '\0';
+                
+                write(client_socket, &response, sizeof(DiscoveryMessage));
+                
+                // Forward discovery to all other peers (propagation)
+                if (disc_msg.ttl > 1) {
+                    printf("Forwarding discovery with TTL=%d to other peers\n", disc_msg.ttl - 1);
+                    struct Node* current = network->peer_list->peer_list.head;
+                    while (current != NULL) {
+                        P2PPeer* peer = (P2PPeer*)current->data;
+                        // Don't send back to the original sender
+                        if (strcmp(peer->address, disc_msg.sender) != 0) {
+                            printf("Forwarding to peer: %s\n", peer->address);
+                            p2p_network_send_discovery(network, peer->address, disc_msg.ttl - 1, our_peer_list);
+                        }
+                        current = current->next;
+                    }
+                }
+                
+                // Also try to connect to peers from the original discovery
+                char* original_peer_list = strdup(disc_msg.peer_list);
+                char* discovery_token = strtok(original_peer_list, ",");
+                while (discovery_token != NULL) {
+                    if (strlen(discovery_token) > 0 && strcmp(discovery_token, network->node_id) != 0) {
+                        // Check if we already know this peer
+                        int exists = 0;
+                        struct Node* check = network->peer_list->peer_list.head;
+                        while (check != NULL) {
+                            P2PPeer* existing_peer = (P2PPeer*)check->data;
+                            if (strcmp(existing_peer->address, discovery_token) == 0) {
+                                exists = 1;
+                                break;
+                            }
+                            check = check->next;
+                        }
+                        
+                        if (!exists) {
+                            printf("Auto-connecting to peer from discovery: %s\n", discovery_token);
+                            p2p_network_connect(network, discovery_token);
+                        }
+                    }
+                    discovery_token = strtok(NULL, ",");
+                }
+                free(original_peer_list);
+            }
+        } 
+        else 
+        {
+            // Try regular message
+            // If the message isn't discover, reset the socket position to the beginning of the message
+            lseek(client_socket, 0, SEEK_SET);
+            P2PMessage msg;
+            if (read(client_socket, &msg, sizeof(P2PMessage)) == sizeof(P2PMessage)) {
+                if (network->message_handler) {
+                    network->message_handler(&msg);
+                }
             }
         }
         
@@ -77,6 +159,18 @@ P2PNetwork* p2p_network_create(int port, const char* node_id, message_handler_t 
     network->node_id[63] = '\0';
     network->peer_list = p2p_peer_list_create();
     network->message_handler = handler;
+    
+    // Load existing peers from file
+    p2p_peer_list_load_from_file(network->peer_list, node_id);
+    
+    // Bootstrap: automatically connect to loaded peers
+    struct Node* current = network->peer_list->peer_list.head;
+    while (current != NULL) {
+        P2PPeer* peer = (P2PPeer*)current->data;
+        printf("Bootstrap: connecting to peer %s\n", peer->address);
+        p2p_network_connect(network, peer->address);
+        current = current->next;
+    }
     
     g_network = network;
     return network;
@@ -125,12 +219,59 @@ int p2p_network_send(P2PNetwork* network, const char* address, const char* type,
     msg.sender[63] = '\0';
     strncpy(msg.data, data, 255);
     msg.data[255] = '\0';
-    msg.ttl = 5;
     
     write(client_socket, &msg, sizeof(P2PMessage));
     close(client_socket);
     
     printf("Sent %s to %s\n", type, address);
+    return 0;
+}
+
+// Send discovery message
+int p2p_network_send_discovery(P2PNetwork* network, const char* address, int ttl, const char* peer_list) {
+    // Parse address
+    char* colon = strrchr(address, ':');
+    if (!colon) return -1;
+    
+    // Make a copy to avoid modifying the original
+    char address_copy[128];
+    strncpy(address_copy, address, sizeof(address_copy) - 1);
+    address_copy[sizeof(address_copy) - 1] = '\0';
+    
+    char* colon_copy = strrchr(address_copy, ':');
+    *colon_copy = '\0';
+    char* ip = address_copy;
+    int port = atoi(colon_copy + 1);
+    
+    // Create client socket
+    int client_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (client_socket < 0) return -1;
+    
+    // Connect
+    struct sockaddr_in server_addr;
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    inet_pton(AF_INET, ip, &server_addr.sin_addr);
+    
+    if (connect(client_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        close(client_socket);
+        return -1;
+    }
+    
+    // Send discovery message
+    DiscoveryMessage msg;
+    strncpy(msg.type, "DISCOVERY", 31);
+    msg.type[31] = '\0';
+    strncpy(msg.sender, network->node_id, 63);
+    msg.sender[63] = '\0';
+    msg.ttl = ttl;
+    strncpy(msg.peer_list, peer_list, 1023);
+    msg.peer_list[1023] = '\0';
+    
+    write(client_socket, &msg, sizeof(DiscoveryMessage));
+    close(client_socket);
+    
+    printf("Sent DISCOVERY to %s with TTL=%d\n", address, ttl);
     return 0;
 }
 
@@ -156,14 +297,32 @@ int p2p_network_connect(P2PNetwork* network, const char* address) {
     printf("Connecting to: %s\n", address);
     
     // Add target peer to our peer list
-    p2p_peer_list_add(network->peer_list, address, "target_peer");
+    p2p_peer_list_add(network->peer_list, address, network->node_id);
     
-    // Send discovery message
-    return p2p_network_send(network, address, "DISCOVERY", "Hello from P2P node!");
+    // Build our peer list string
+    char peer_list_str[1024];
+    p2p_build_peer_list_string(network->peer_list, peer_list_str, sizeof(peer_list_str));
+    
+    // Send discovery message to all peers
+    struct Node* current = network->peer_list->peer_list.head;
+    int sent_count = 0;
+    
+    while (current != NULL) {
+        P2PPeer* peer = (P2PPeer*)current->data;
+        printf("Sending discovery to peer: %s\n", peer->address);
+        if (p2p_network_send_discovery(network, peer->address, 3, peer_list_str) == 0) {
+            sent_count++;
+        }
+        current = current->next;
+    }
+    
+    printf("Sent discovery to %d peers\n", sent_count);
+    return sent_count;
 }
 
 // Stop network
 void p2p_network_stop(P2PNetwork* network) {
+    (void)network;
     // Implementation for graceful shutdown
 }
 

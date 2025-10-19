@@ -6,23 +6,31 @@
 #include "p2p_network.h"
 
 int main(int argc, char* argv[]) {
-    int port = 1248;
+    char* node_address = "127.0.0.1:1248";  // Default
     char* connect_to = NULL;
     
     // Parse arguments
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
-            port = atoi(argv[++i]);
+        if (strcmp(argv[i], "--address") == 0 && i + 1 < argc) {
+            node_address = argv[++i];
         }
         else if (strcmp(argv[i], "--connect-to") == 0 && i + 1 < argc) {
             connect_to = argv[++i];
         }
     }
     
-    printf("Starting P2P node on port %d\n", port);
+    printf("Starting P2P node on %s\n", node_address);
+    
+    // Extract port from address
+    char* colon = strrchr(node_address, ':');
+    if (!colon) {
+        printf("Error: Address must be in format IP:PORT\n");
+        return 1;
+    }
+    int port = atoi(colon + 1);
     
     // Create network
-    P2PNetwork* network = p2p_network_create(port, "p2p_node", p2p_message_default_handler);
+    P2PNetwork* network = p2p_network_create(port, node_address, p2p_message_default_handler);
     if (!network) {
         printf("Failed to create P2P network\n");
         return 1;
