@@ -18,7 +18,6 @@ int p2p_peer_list_add(P2PPeerList* list, const char* address, const char* node_i
         return 0;  // Already exists
     }
     
-    // Also check in-memory list for efficiency
     struct Node* current = list->peer_list.head;
     while (current != NULL) {
         P2PPeer* existing_peer = (P2PPeer*)current->data;
