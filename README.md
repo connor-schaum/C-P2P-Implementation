@@ -209,24 +209,13 @@ The system provides debug output showing:
 - **Message Format**: Binary structures sent over TCP
 - **Concurrency**: Server thread handles incoming connections asynchronously
 
-## Limitations
-
-- Connections are opened on-demand for sending (not persistent)
-- No automatic reconnection if a peer disconnects
-- No message encryption or authentication
-- Single-threaded command handling (main loop)
-- Peer list files may grow if peers are not cleaned up
-
 ## Future Enhancements
 
-- Persistent TCP connections between peers
-- Peer health checking and automatic reconnection
 - Message encryption and authentication
 - Distributed consensus mechanisms
 - Performance optimizations
 - Network monitoring and metrics
 - Peer list cleanup and expiration
-- Better error handling and recovery
 
 ## License
 
