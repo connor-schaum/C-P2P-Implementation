@@ -3,7 +3,7 @@
 
 // Build peer list string from peer list
 void p2p_build_peer_list_string(void* peer_list, char* peer_list_str, size_t str_size) {
-    peer_list_str[0] = '\0';  // Start with empty string
+    peer_list_str[0] = '\0';
     
     P2PPeerList* pl = (P2PPeerList*)peer_list;
     struct Node* current = pl->peer_list.head;
